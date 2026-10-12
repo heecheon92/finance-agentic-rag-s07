@@ -164,10 +164,13 @@ def agreement(judge_scores: list[int], human_labels: list[int]) -> dict:
     """judge 와 사람 라벨의 일치도. 완전 일치와 ±1 이내를 나눠 본다.
 
     반환: {"n", "exact", "within_1", "mae"}. 둘의 길이가 다르면 짧은 쪽까지만 본다.
-    둘 다 비어 있으면 {"n": 0}. exact · within_1 은 비율(소수 3자리), mae 는 평균 절대 오차(소수 3자리).
-
-    [6회차 실습 2] 이 함수를 채우세요. 테스트는 tests/test_judge.py 입니다.
-    왜 셋인가: 완전 일치만 보면 6점 척도에서 한 점 차이도 불일치가 되어 judge 가 쓸모없어 보이고,
-    ±1 만 보면 늘 후하게 주는 judge 를 못 잡는다. MAE 가 그 치우침의 크기다.
+    둘 다 비어 있으면 {"n": 0}. exact · within_1 은 비율(소수 3자리), mae 는 평균 절대 오차.
     """
-    raise NotImplementedError("6회차 실습 2: judge.agreement 를 채우세요")
+    n = min(len(judge_scores), len(human_labels))
+    if not n:
+        return {"n": 0}
+    exact = sum(1 for a, b in zip(judge_scores, human_labels) if a == b)
+    within1 = sum(1 for a, b in zip(judge_scores, human_labels) if abs(a - b) <= 1)
+    mae = sum(abs(a - b) for a, b in zip(judge_scores, human_labels)) / n
+    return {"n": n, "exact": round(exact / n, 3), "within_1": round(within1 / n, 3),
+            "mae": round(mae, 3)}
