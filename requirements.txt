@@ -18,3 +18,10 @@ kiwipiepy>=0.23
 rank-bm25>=0.2.2
 # 5회차부터. 에이전트 정책(policy.yaml)과 계산 명세(calc_specs.yaml)를 읽습니다
 pyyaml>=6
+# 7회차부터. API 와 스트리밍, 테스트 클라이언트(httpx)
+fastapi>=0.120
+uvicorn[standard]>=0.38
+sse-starlette>=3.4
+slowapi>=0.1.9
+httpx>=0.27
+# 선택(부하 테스트). 필요할 때만: uv pip install --python .venv/bin/python locust

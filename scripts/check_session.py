@@ -301,29 +301,57 @@ def check_s06() -> dict:
 
 
 def check_s07() -> dict:
-    import urllib.request
-    base = "http://localhost:8000"
+    """7회차. 서버를 따로 띄우지 않고 앱을 프로세스 안에서 부른다(TestClient). 모델 적재 25초가 든다.
+
+    수업 끝에는 4/5 가 정상이다. 보안 질의서 답변서(docs/security_questionnaire.md)가 과제다.
+    """
+    from finrag.settings import get_settings
+    s = get_settings()
     out = {}
+    # 1 · 2: /ask 와 /ask/stream 이 실제 그래프로 돈다. 실습 1 · 2 를 안 채웠으면 NotImplementedError.
     try:
-        with urllib.request.urlopen(f"{base}/health", timeout=5) as r:
-            h = json.loads(r.read())
-        out["/health 200"] = ok(h.get("status") == "ok", f"포인트 {h.get('points')}")
-    except Exception as e:
-        out["/health 200"] = ok(False, f"{type(e).__name__}")
+        from fastapi.testclient import TestClient
+        from finrag.api.main import app
+        c = TestClient(app)
+        q = {"question": "예금거래기본약관 제12조는 무엇인가요?"}
+        a = c.post("/ask", json=q, headers={"X-API-Key": s.api_key}).json()
+        out["/ask 응답"] = ok(bool(a.get("sources")) and bool(a.get("basis_date")) and bool(a.get("policy_version")),
+                            f"근거 {len(a.get('sources', []))}건 · 기준일 {a.get('basis_date')} · {a.get('latency_ms', 0):,.0f}ms")
+    except Exception as e:  # noqa: BLE001
+        hint = ("make api 가 떠 있습니다. 서버 터미널에서 Ctrl+C 뒤 다시(임베디드 Qdrant 는 프로세스 하나만 엽니다)"
+                if "already accessed" in str(e) else f"{type(e).__name__}: {str(e)[:60]}")
+        out["/ask 응답"] = ok(False, hint)
     try:
-        from finrag.settings import get_settings
-        req = urllib.request.Request(
-            f"{base}/ask", method="POST",
-            data=json.dumps({"question": "예금거래기본약관 제12조는 무엇인가요?"}).encode(),
-            headers={"Content-Type": "application/json", "X-API-Key": get_settings().api_key})
-        with urllib.request.urlopen(req, timeout=120) as r:
-            a = json.loads(r.read())
-        out["/ask 응답"] = ok(bool(a.get("sources")) and bool(a.get("basis_date")),
-                            f"sources {len(a.get('sources', []))}건")
-    except Exception as e:
-        out["/ask 응답"] = ok(False, f"{type(e).__name__}")
-    out["런북"] = ok((ROOT / "docs" / "runbook.md").exists())
-    out["보안 답변서"] = ok((ROOT / "docs" / "security_questionnaire.md").exists())
+        kinds = []
+        with c.stream("POST", "/ask/stream", json=q, headers={"X-API-Key": s.api_key}) as r:
+            for line in r.iter_lines():
+                if line.startswith("event:"):
+                    kinds.append(line.split(":", 1)[1].strip())
+        out["/ask/stream 이벤트"] = ok("node_start" in kinds and "done" in kinds and ("token" in kinds or "citation" in kinds),
+                                  f"node_start {kinds.count('node_start')} · token {kinds.count('token')} · citation {kinds.count('citation')} · 마지막 {kinds[-1] if kinds else '-'}")
+    except Exception as e:  # noqa: BLE001
+        out["/ask/stream 이벤트"] = ok(False, f"{type(e).__name__}: {str(e)[:60]}")
+    # 3: 응답 시간 측정 기록
+    b = _json(s.results_dir / "api_bench.json") or {}
+    out["응답 시간 측정"] = ok(b.get("n_ok", 0) >= 10 and b.get("latency_ms_p95") is not None,
+                         f"{b.get('n_ok')}문항 p95 {b.get('latency_ms_p95', 0):,.0f}ms · 문항당 {b.get('cost_krw_avg')}원" if b
+                         else "results/api_bench.json 없음 (서버를 띄우고 make api-bench)")
+    # 4: 감사 로그. 열 줄 이상, 원문 없음
+    log = ROOT / "logs" / "audit.jsonl"
+    if log.exists():
+        recs = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
+        raw = sum(1 for r in recs if "question" in r)
+        out["감사 로그"] = ok(len(recs) >= 10 and raw == 0 and all(len(r.get("question_sha256", "")) == 64 for r in recs),
+                         f"{len(recs)}줄 · 원문 {raw}건 · 키는 해시 앞 12자")
+    else:
+        out["감사 로그"] = ok(False, "logs/audit.jsonl 없음 (/ask 를 열 번 이상)")
+    # 5: 보안 질의서 답변서(과제)
+    doc = ROOT / "docs" / "security_questionnaire.md"
+    if not doc.exists():
+        out["보안 답변서"] = ok(False, "docs/security_questionnaire.md 없음 (docs/templates/ 를 복사해 채운다)")
+    else:
+        blanks = doc.read_text(encoding="utf-8").count("____")
+        out["보안 답변서"] = ok(blanks == 0, f"빈칸 {blanks}곳 남음" if blanks else f"{len(doc.read_text(encoding='utf-8')):,}자")
     return out
 
 

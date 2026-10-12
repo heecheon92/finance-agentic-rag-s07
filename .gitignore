@@ -19,3 +19,5 @@ data/bm25_cache/
 models/
 data/embeddings/
 data/qdrant_local/
+# 7회차. 감사 로그는 로컬에만
+logs/
