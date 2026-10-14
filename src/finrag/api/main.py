@@ -11,6 +11,7 @@
 그래프는 프로세스당 하나를 만들어 재사용합니다. 만드는 데 모델 적재 25초가 들기 때문입니다.
 그래서 서버를 띄운 뒤 첫 요청이 느립니다(콜드 스타트). 벤치(scripts/api_bench.py)는 첫 호출을 따로 셉니다.
 """
+
 from __future__ import annotations
 
 import time
@@ -42,7 +43,9 @@ app.state.limiter = limiter
 @app.exception_handler(RateLimitExceeded)
 async def _rate_limit(request: Request, exc: RateLimitExceeded):
     # 429. 상한은 .env 의 RATE_LIMIT(기본 30/minute). 키가 아니라 접속 주소 기준입니다.
-    return JSONResponse({"detail": "요청이 너무 잦습니다. 잠시 후 다시 시도해 주세요."}, status_code=429)
+    return JSONResponse(
+        {"detail": "요청이 너무 잦습니다. 잠시 후 다시 시도해 주세요."}, status_code=429
+    )
 
 
 _graph = None
@@ -63,6 +66,7 @@ def run_graph(question: str) -> tuple[dict, dict]:
     감사 로그와 응답의 usage 에 들어간다. 그래서 요청 하나가 얼마인지 로그에서 바로 읽을 수 있다.
     """
     from langchain_core.callbacks import UsageMetadataCallbackHandler
+
     usage = UsageMetadataCallbackHandler()
     out = graph().invoke({"question": question}, {"callbacks": [usage]})
     return out, dict(usage.usage_metadata)
@@ -74,17 +78,24 @@ def sources_from(hits: list[dict]) -> list[Source]:
     시행일 · 심의필 만료 · 열화 재현본 표시가 같이 간다. 고객은 "어느 조항"만이 아니라
     "언제 판"인지도 봐야 한다. 2013년 판과 2024년 판은 같은 제7조라도 다른 답이다.
     """
-    return [Source(chunk_id=h["chunk_id"], doc_id=h.get("doc_id", ""),
-                   doc_type=h.get("doc_type", ""), issuer=h.get("issuer", ""),
-                   article=h.get("article", ""), article_title=h.get("article_title", ""),
-                   page_start=h.get("page_start", 0),
-                   effective_from=h.get("effective_from", ""),
-                   review_expiry=h.get("review_expiry", ""),
-                   expired=bool(h.get("expired")),
-                   synthetic_degraded=bool(h.get("synthetic_degraded")),
-                   excerpt=h.get("text", "")[:300],
-                   score=float(h.get("rerank_score", h.get("score", 0.0))))
-            for h in hits[:8]]
+    return [
+        Source(
+            chunk_id=h["chunk_id"],
+            doc_id=h.get("doc_id", ""),
+            doc_type=h.get("doc_type", ""),
+            issuer=h.get("issuer", ""),
+            article=h.get("article", ""),
+            article_title=h.get("article_title", ""),
+            page_start=h.get("page_start", 0),
+            effective_from=h.get("effective_from", ""),
+            review_expiry=h.get("review_expiry", ""),
+            expired=bool(h.get("expired")),
+            synthetic_degraded=bool(h.get("synthetic_degraded")),
+            excerpt=h.get("text", "")[:300],
+            score=float(h.get("rerank_score", h.get("score", 0.0))),
+        )
+        for h in hits[:8]
+    ]
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -93,15 +104,20 @@ def health() -> HealthResponse:
 
     포인트 수가 0 이면 인덱스가 없는 것이다. 런북의 "Qdrant 가 죽었다" 시나리오가 이 줄을 본다.
     """
-    return HealthResponse(status="ok", collection=s.qdrant_collection,
-                          points=qdrant.count(), llm=s.llm_model_main,
-                          policy_version=policy()["policy_version"])
+    return HealthResponse(
+        status="ok",
+        collection=s.qdrant_collection,
+        points=qdrant.count(),
+        llm=s.llm_model_main,
+        policy_version=policy()["policy_version"],
+    )
 
 
 @app.post("/ask", response_model=AskResponse)
 @limiter.limit(s.rate_limit)
-def ask(request: Request, body: AskRequest,
-        key_id: str = Depends(require_api_key)) -> AskResponse:
+def ask(
+    request: Request, body: AskRequest, key_id: str = Depends(require_api_key)
+) -> AskResponse:
     """실습 1. 질문 하나를 그래프에 넣고 AskResponse 를 만든다.
 
     순서는 셋이다.
@@ -112,18 +128,53 @@ def ask(request: Request, body: AskRequest,
       (3) audit.write 로 감사 로그 한 줄을 남긴다. 질문 원문은 audit 가 해시로 바꾼다. 여기서 바꾸지 않는다.
     테스트는 tests/test_api.py 의 실습 1 다섯. 빠뜨리기 쉬운 것은 basis_date 와 감사 로그다.
     답변 문자열만 반환하면 테스트가 아니라 고객이 거절한다.
+
+    latency_ms 는 그래프 실행 시간이며 응답 직렬화·로그 기록 시간은 제외한다.
+    as_of 는 응답 기준일에만 반영한다. 검색 조건은 질문에서 그래프가 추출한다.
     """
-    raise NotImplementedError("7회차 실습 1: api.main.ask 를 채우세요. 순서는 독스트링, 요구사항은 tests/test_api.py 의 실습 1 다섯")
+    # raise NotImplementedError("7회차 실습 1: api.main.ask 를 채우세요. 순서는 독스트링, 요구사항은 tests/test_api.py 의 실습 1 다섯")
+    started = time.perf_counter()
+    out, usage = run_graph(body.question)
+    latency_ms = (time.perf_counter() - started) * 1000
+    response = AskResponse(
+        answer=out["answer"],
+        notices=out.get("notices", []),
+        basis_date=body.as_of or date.today().isoformat(),
+        sources=sources_from(out.get("hits", [])),
+        abstained=out.get("abstained", False),
+        abstain_reason=out.get("abstain_reason", ""),
+        escalation_reason=out.get("escalation_reason", ""),
+        policy_version=policy()["policy_version"],
+        request_id=uuid.uuid4().hex[:12],
+        latency_ms=latency_ms,
+        retry_count=out.get("retry_count", 0),
+        usage=usage,
+    )
+    audit.write(
+        request_id=response.request_id,
+        api_key_id=key_id,
+        question=body.question,
+        response=response.model_dump(),
+        model=s.llm_model_main,
+        policy_version=response.policy_version,
+        latency_ms=latency_ms,
+        usage=usage,
+    )
+    return response
 
 
 @app.post("/ask/stream")
 @limiter.limit(s.rate_limit)
-async def ask_stream(request: Request, body: AskRequest,
-                     key_id: str = Depends(require_api_key)):
+async def ask_stream(
+    request: Request, body: AskRequest, key_id: str = Depends(require_api_key)
+):
     """같은 질문을 SSE 로. 이벤트는 sse.stream_graph 가 만든다(실습 2)."""
     rid = uuid.uuid4().hex[:12]
-    return EventSourceResponse(_as_events(sse.stream_graph(graph(), {"question": body.question},
-                                                           request_id=rid)))
+    return EventSourceResponse(
+        _as_events(
+            sse.stream_graph(graph(), {"question": body.question}, request_id=rid)
+        )
+    )
 
 
 async def _as_events(events):

@@ -7,6 +7,7 @@ LangGraph 의 astream 은 노드 실행(updates)과 토큰(messages)을 함께 �
 이벤트 다섯: node_start(노드가 처음 시작될 때 한 번) | citation(hits 가 생겼을 때, 상위 8개) |
 token(답변 노드의 글자) | done(끝. request_id · answer · abstained · notices) | error(스트림 중 예외)
 """
+
 from __future__ import annotations
 
 import json
@@ -30,6 +31,65 @@ async def stream_graph(graph, state: dict, *, request_id: str) -> AsyncIterator[
       답변 노드의 토큰은 그 노드의 updates 보다 먼저 도착하므로, 처음 보는 노드면 node_start 를 먼저 보낸다.
     - 끝에 done. 예외가 나면 error 이벤트(연결만 끊으면 클라이언트가 원인을 모른다).
     테스트는 tests/test_api.py 의 실습 2 다섯. 모두 가짜 그래프라 LLM 없이 돈다.
+
+    node_start 는 해당 노드의 첫 이벤트를 관찰한 시점이며 재검색 때 중복하지 않는다.
+    빈 토큰과 비텍스트 블록은 보내지 않는다. error 뒤에는 done 을 보내지 않는다.
     """
-    raise NotImplementedError("7회차 실습 2: api.sse.stream_graph 를 채우세요. 모드 둘(updates · messages)과 이벤트 다섯은 독스트링, 요구사항은 tests/test_api.py 의 실습 2 다섯")
-    yield  # noqa: E303 — 이 줄이 있어야 이 함수가 async generator 로 남는다. 지우지 말고 위의 raise 를 코드로 바꾼다
+    # raise NotImplementedError("7회차 실습 2: api.sse.stream_graph 를 채우세요. 모드 둘(updates · messages)과 이벤트 다섯은 독스트링, 요구사항은 tests/test_api.py 의 실습 2 다섯")
+    # yield  # noqa: E303 — 이 줄이 있어야 이 함수가 async generator 로 남는다. 지우지 말고 위의 raise 를 코드로 바꾼다
+    seen_nodes: set[str] = set()
+    final = dict(state)
+    try:
+        async for mode, chunk in graph.astream(
+            state, stream_mode=["updates", "messages"]
+        ):
+            if mode == "updates":
+                for node, update in chunk.items():
+                    if node not in seen_nodes:
+                        seen_nodes.add(node)
+                        yield event("node_start", {"node": node})
+                    if not update:
+                        continue
+                    final.update(update)
+                    if "hits" in update:
+                        yield event(
+                            "citation",
+                            [
+                                {
+                                    "chunk_id": hit["chunk_id"],
+                                    "doc_id": hit.get("doc_id", ""),
+                                    "article": hit.get("article", ""),
+                                    "page_start": hit.get("page_start", 0),
+                                }
+                                for hit in update["hits"][:8]
+                            ],
+                        )
+            elif mode == "messages":
+                message, metadata = chunk
+                node = metadata.get("langgraph_node")
+                if node not in ANSWER_NODES:
+                    continue
+                if node not in seen_nodes:
+                    seen_nodes.add(node)
+                    yield event("node_start", {"node": node})
+                content = message.content
+                if isinstance(content, list):
+                    content = "".join(
+                        block if isinstance(block, str) else block.get("text", "")
+                        for block in content
+                        if isinstance(block, str) or block.get("type") == "text"
+                    )
+                if content:
+                    yield event("token", {"text": content})
+    except Exception as exc:
+        yield event("error", {"message": f"{type(exc).__name__}: {exc}"})
+        return
+    yield event(
+        "done",
+        {
+            "request_id": request_id,
+            "answer": final.get("answer", ""),
+            "abstained": final.get("abstained", False),
+            "notices": final.get("notices", []),
+        },
+    )
